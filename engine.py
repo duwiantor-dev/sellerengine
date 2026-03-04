@@ -1,0 +1,438 @@
+# engine.py
+
+import io
+import re
+import zipfile
+from dataclasses import dataclass
+from typing import Dict, List, Optional, Tuple, Iterable
+
+import pandas as pd
+from openpyxl import load_workbook, Workbook
+from openpyxl.cell.cell import MergedCell
+from openpyxl.worksheet.worksheet import Worksheet
+
+
+SMALL_TO_THOUSAND_THRESHOLD = 1_000_000
+AUTO_MULTIPLIER_FOR_SMALL = 1000
+
+
+@dataclass
+class ChangeRow:
+    file: str
+    excel_row: int
+    sku_full: str
+    old_value: int
+    new_value: int
+    note: str
+
+
+def _norm_str(x) -> str:
+    if x is None:
+        return ""
+    return str(x).strip()
+
+
+def normalize_header(x) -> str:
+    return _norm_str(x).replace("\n", " ").replace("\r", " ").strip().upper()
+
+
+def safe_cell_value(cell):
+    if isinstance(cell, MergedCell):
+        return None
+    return cell.value
+
+
+def parse_int_maybe(v) -> Optional[int]:
+    if v is None:
+        return None
+    s = _norm_str(v)
+    if s == "":
+        return None
+    s = s.replace(".", "").replace(",", "")
+    try:
+        return int(float(s))
+    except Exception:
+        return None
+
+
+def apply_multiplier_if_needed(val: Optional[int]) -> Optional[int]:
+    if val is None:
+        return None
+    if val < SMALL_TO_THOUSAND_THRESHOLD:
+        return int(val) * AUTO_MULTIPLIER_FOR_SMALL
+    return int(val)
+
+
+def excel_col(letter: str) -> int:
+    letter = letter.upper().strip()
+    n = 0
+    for ch in letter:
+        n = n * 26 + (ord(ch) - ord("A") + 1)
+    return n
+
+
+def workbook_to_bytes(wb: Workbook) -> bytes:
+    buf = io.BytesIO()
+    wb.save(buf)
+    return buf.getvalue()
+
+
+def find_col_by_headers(ws: Worksheet, header_row: int, headers: List[str]) -> Optional[int]:
+    headers_norm = {normalize_header(h) for h in headers}
+    for c in range(1, ws.max_column + 1):
+        v = safe_cell_value(ws.cell(row=header_row, column=c))
+        if normalize_header(v) in headers_norm:
+            return c
+    return None
+
+
+def build_pricelist_map(pricelist_bytes: bytes, header_row: int, sku_header_candidates: List[str], price_col_letter: str) -> Dict[str, int]:
+    wb = load_workbook(io.BytesIO(pricelist_bytes), data_only=True)
+    ws = wb.active
+
+    # cari SKU col by header
+    sku_candidates_norm = {normalize_header(x) for x in sku_header_candidates}
+    sku_col = None
+    for c in range(1, ws.max_column + 1):
+        v = safe_cell_value(ws.cell(row=header_row, column=c))
+        if normalize_header(v) in sku_candidates_norm:
+            sku_col = c
+            break
+    if sku_col is None:
+        raise ValueError("Pricelist: kolom SKU tidak ditemukan (cek header row).")
+
+    price_col = excel_col(price_col_letter)
+
+    out: Dict[str, int] = {}
+    for r in range(header_row + 1, ws.max_row + 1):
+        sku = _norm_str(safe_cell_value(ws.cell(row=r, column=sku_col)))
+        if not sku:
+            continue
+        pv = parse_int_maybe(safe_cell_value(ws.cell(row=r, column=price_col)))
+        pv = apply_multiplier_if_needed(pv)
+        if pv is None:
+            continue
+        out[sku] = int(pv)
+    return out
+
+
+def build_addon_map(addon_bytes: bytes, code_candidates: List[str], price_candidates: List[str]) -> Dict[str, int]:
+    wb = load_workbook(io.BytesIO(addon_bytes), data_only=True)
+    ws = wb.active
+
+    # scan 1..30 untuk header
+    code_col = None
+    price_col = None
+    for r in range(1, min(30, ws.max_row) + 1):
+        # map header row
+        m = {}
+        for c in range(1, ws.max_column + 1):
+            m[normalize_header(safe_cell_value(ws.cell(row=r, column=c)))] = c
+
+        for cand in code_candidates:
+            if normalize_header(cand) in m:
+                code_col = m[normalize_header(cand)]
+                break
+        for cand in price_candidates:
+            if normalize_header(cand) in m:
+                price_col = m[normalize_header(cand)]
+                break
+
+        if code_col and price_col:
+            header_row = r
+            break
+    else:
+        raise ValueError("Addon mapping: header tidak ditemukan (butuh addon_code & harga).")
+
+    out: Dict[str, int] = {}
+    for r in range(header_row + 1, ws.max_row + 1):
+        code = _norm_str(safe_cell_value(ws.cell(row=r, column=code_col)))
+        if not code:
+            continue
+        pv = parse_int_maybe(safe_cell_value(ws.cell(row=r, column=price_col)))
+        pv = apply_multiplier_if_needed(pv)
+        if pv is None:
+            continue
+        out[code] = int(pv)
+    return out
+
+
+def split_sku_addons(sku_full: str) -> Tuple[str, List[str]]:
+    parts = [p.strip() for p in _norm_str(sku_full).split("+") if p.strip()]
+    if not parts:
+        return "", []
+    base = parts[0]
+    addons = parts[1:]
+    return base, addons
+
+
+def keep_only_rows(ws: Worksheet, data_start_row: int, keep_rows: List[int]) -> None:
+    keep_set = set(keep_rows)
+    # delete from bottom
+    for r in range(ws.max_row, data_start_row - 1, -1):
+        if r not in keep_set:
+            ws.delete_rows(r, 1)
+
+
+def make_zip(files: List[Tuple[str, bytes]]) -> bytes:
+    buf = io.BytesIO()
+    with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED) as zf:
+        for name, data in files:
+            zf.writestr(name, data)
+    return buf.getvalue()
+
+
+# =========================
+# HANDLER: harga normal / coret (in-place edit template)
+# =========================
+def process_price_inplace(
+    template_bytes: bytes,
+    template_name: str,
+    spec: dict,
+    pricelist_map: Dict[str, int],
+    addon_map: Dict[str, int],
+) -> Tuple[Optional[bytes], List[ChangeRow], List[dict]]:
+    wb = load_workbook(io.BytesIO(template_bytes))
+    ws = wb.active
+
+    header_row = spec["template"]["header_row"]
+    data_start_row = spec["template"]["data_start_row"]
+
+    sku_col = find_col_by_headers(ws, header_row, spec["template"]["sku_headers"])
+    price_col = find_col_by_headers(ws, header_row, spec["template"]["price_headers"])
+
+    if sku_col is None or price_col is None:
+        raise ValueError(f"[{template_name}] kolom SKU/Harga tidak ditemukan (cek header).")
+
+    changed_rows: List[int] = []
+    changes: List[ChangeRow] = []
+    issues: List[dict] = []
+
+    for r in range(data_start_row, ws.max_row + 1):
+        sku_full = _norm_str(safe_cell_value(ws.cell(row=r, column=sku_col)))
+        if not sku_full:
+            continue
+
+        old_val = parse_int_maybe(safe_cell_value(ws.cell(row=r, column=price_col))) or 0
+
+        base, addons = split_sku_addons(sku_full)
+        if not base or base not in pricelist_map:
+            # skip sesuai requirement
+            continue
+
+        total = int(pricelist_map[base])
+        ok = True
+        for a in addons:
+            if a not in addon_map:
+                ok = False
+                break
+            total += int(addon_map[a])
+        if not ok:
+            continue
+
+        if int(total) == int(old_val):
+            continue
+
+        ws.cell(row=r, column=price_col).value = int(total)
+        changed_rows.append(r)
+        changes.append(ChangeRow(template_name, r, sku_full, int(old_val), int(total), "changed"))
+
+    if not changed_rows:
+        return None, changes, issues
+
+    keep_only_rows(ws, data_start_row, changed_rows)
+    return workbook_to_bytes(wb), changes, issues
+
+
+# =========================
+# HANDLER: stok (in-place edit template)
+# =========================
+def process_stock_inplace(
+    template_bytes: bytes,
+    template_name: str,
+    spec: dict,
+    stock_value_map: Dict[str, int],
+) -> Tuple[Optional[bytes], List[ChangeRow]]:
+    wb = load_workbook(io.BytesIO(template_bytes))
+    ws = wb.active
+
+    header_row = spec["template"]["header_row"]
+    data_start_row = spec["template"]["data_start_row"]
+
+    sku_col = find_col_by_headers(ws, header_row, spec["template"]["sku_headers"])
+    qty_col = find_col_by_headers(ws, header_row, spec["template"]["stock_headers"])
+
+    if sku_col is None or qty_col is None:
+        raise ValueError(f"[{template_name}] kolom SKU/Stok tidak ditemukan (cek header).")
+
+    changed_rows: List[int] = []
+    changes: List[ChangeRow] = []
+
+    def norm_sku(v) -> str:
+        s = _norm_str(v).upper()
+        if not s:
+            return ""
+        if re.fullmatch(r"\d+\.0", s):
+            s = s[:-2]
+        s = re.sub(r"\s+", "", s)
+        return s
+
+    for r in range(data_start_row, ws.max_row + 1):
+        sku_full = _norm_str(safe_cell_value(ws.cell(row=r, column=sku_col)))
+        if not sku_full:
+            continue
+        base, _addons = split_sku_addons(sku_full)
+        key = norm_sku(base)
+        if not key:
+            continue
+
+        if key not in stock_value_map:
+            continue
+
+        old_val = parse_int_maybe(safe_cell_value(ws.cell(row=r, column=qty_col))) or 0
+        new_val = int(stock_value_map[key])
+
+        if int(old_val) == int(new_val):
+            continue
+
+        ws.cell(row=r, column=qty_col).value = int(new_val)
+        changed_rows.append(r)
+        changes.append(ChangeRow(template_name, r, sku_full, int(old_val), int(new_val), "changed"))
+
+    if not changed_rows:
+        return None, changes
+
+    keep_only_rows(ws, data_start_row, changed_rows)
+    return workbook_to_bytes(wb), changes
+
+
+# =========================
+# HANDLER: TikTok Discount output template (max 1000 rows/file)
+# =========================
+def chunk_list(items: List[dict], size: int) -> List[List[dict]]:
+    return [items[i:i+size] for i in range(0, len(items), size)]
+
+
+def build_tiktok_discount_workbook(rows: List[dict], headers: List[str]) -> bytes:
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Sheet1"
+
+    # exact header row 1
+    for i, h in enumerate(headers, start=1):
+        ws.cell(row=1, column=i).value = h
+
+    r = 2
+    for it in rows:
+        ws.cell(row=r, column=1).value = it.get("product_id", "")
+        ws.cell(row=r, column=2).value = it.get("sku_id", "")
+        ws.cell(row=r, column=3).value = it.get("offer_price", "")
+        ws.cell(row=r, column=4).value = it.get("promo_stock", "")
+        # col 5 kosong
+        r += 1
+
+    return workbook_to_bytes(wb)
+
+
+def process_tiktok_discount(
+    template_bytes: bytes,
+    template_name: str,
+    spec: dict,
+    pricelist_map: Dict[str, int],
+    addon_map: Dict[str, int],
+    discount_rp: int,
+    only_changed: bool = True,
+) -> Tuple[List[Tuple[str, bytes]], pd.DataFrame]:
+    wb = load_workbook(io.BytesIO(template_bytes), data_only=True)
+    ws = wb.active
+
+    header_row = spec["input"]["header_row"]
+    data_start_row = spec["input"]["data_start_row"]
+
+    # fixed col fallback
+    col_product_id = excel_col(spec["input"]["col_product_id"])
+    col_sku_id = excel_col(spec["input"]["col_sku_id"])
+    col_price = excel_col(spec["input"]["col_price"])
+    col_stock = excel_col(spec["input"]["col_stock"])
+    col_seller_sku = excel_col(spec["input"]["col_seller_sku"])
+
+    # fallback: kalau H kosong, pakai E (sesuai file kamu)
+    def col_is_all_empty(col_idx: int) -> bool:
+        for rr in range(data_start_row, min(ws.max_row, data_start_row + 50) + 1):
+            v = ws.cell(row=rr, column=col_idx).value
+            if v is not None and _norm_str(v) != "":
+                return False
+        return True
+
+    if col_is_all_empty(col_seller_sku):
+        col_seller_sku = excel_col("E")
+
+    out_rows: List[dict] = []
+    preview_rows: List[dict] = []
+
+    for r in range(data_start_row, ws.max_row + 1):
+        product_id = _norm_str(ws.cell(row=r, column=col_product_id).value)
+        sku_id = _norm_str(ws.cell(row=r, column=col_sku_id).value)
+
+        old_price = parse_int_maybe(ws.cell(row=r, column=col_price).value) or 0
+        promo_stock = parse_int_maybe(ws.cell(row=r, column=col_stock).value)
+        promo_stock = int(promo_stock) if promo_stock is not None else ""
+
+        seller_sku_full = _norm_str(ws.cell(row=r, column=col_seller_sku).value)
+
+        if not product_id and not sku_id and not seller_sku_full:
+            continue
+
+        base, addons = split_sku_addons(seller_sku_full)
+        if not base or base not in pricelist_map:
+            continue
+
+        total = int(pricelist_map[base])
+        ok = True
+        for a in addons:
+            if a not in addon_map:
+                ok = False
+                break
+            total += int(addon_map[a])
+        if not ok:
+            continue
+
+        new_offer = total - int(discount_rp)
+        if new_offer < 0:
+            new_offer = 0
+
+        if only_changed and int(new_offer) == int(old_price):
+            continue
+
+        out_rows.append({
+            "product_id": product_id,
+            "sku_id": sku_id,
+            "offer_price": int(new_offer),
+            "promo_stock": promo_stock,
+        })
+        preview_rows.append({
+            "template": template_name,
+            "row": r,
+            "seller_sku": seller_sku_full,
+            "old_price": int(old_price),
+            "new_offer_price": int(new_offer),
+        })
+
+    headers = spec["output"]["headers"]
+    max_rows = int(spec["output"]["max_rows_per_file"])
+
+    chunks = chunk_list(out_rows, max_rows)
+    out_files: List[Tuple[str, bytes]] = []
+
+    if not chunks or (len(chunks) == 1 and len(chunks[0]) == 0):
+        return [], pd.DataFrame(preview_rows)
+
+    if len(chunks) == 1:
+        out_xlsx = build_tiktok_discount_workbook(chunks[0], headers)
+        out_files.append((f"{template_name.replace('.xlsx','')}_Product Discount.xlsx", out_xlsx))
+    else:
+        for i, ch in enumerate(chunks, start=1):
+            out_xlsx = build_tiktok_discount_workbook(ch, headers)
+            out_files.append((f"{template_name.replace('.xlsx','')}_Product Discount {i}.xlsx", out_xlsx))
+
+    return out_files, pd.DataFrame(preview_rows)
