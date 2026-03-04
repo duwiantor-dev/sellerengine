@@ -49,7 +49,7 @@ SPECS = {
             "price_headers": ["Harga Ritel (Mata Uang Lokal)"],
         },
         "pricelist": {
-            "sheet_name": "change",
+            "sheet_name": "CHANGE",
             "header_row": 2,
             "sku_header_candidates": ["KODEBARANG", "KODE BARANG"],
             "price_col_letter": "M3",
@@ -67,7 +67,7 @@ SPECS = {
             "price_headers": ["Harga", "Price", "Harga Normal", "Harga Ritel (Mata Uang Lokal)"],
         },
         "pricelist": {
-            "sheet_name": "change",
+            "sheet_name": "CHANGE",
             "header_row": 2,
             "sku_header_candidates": ["KODEBARANG", "KODE BARANG"],
             "price_col_letter": "M4",
@@ -85,7 +85,7 @@ SPECS = {
             "price_headers": ["Harga Ritel (Mata Uang Lokal)"],
         },
         "pricelist": {
-            "sheet_name": "change",
+            "sheet_name": "CHANGE",
             "header_row": 2,
             "sku_header_candidates": ["KODEBARANG", "KODE BARANG"],
             "price_col_letter": "M4",
@@ -103,7 +103,7 @@ SPECS = {
             "price_headers": ["Harga"], # ✅ BigSeller Harga
         },
         "pricelist": {
-            "sheet_name": "change",
+            "sheet_name": "CHANGE",
             "header_row": 2,
             "sku_header_candidates": ["KODEBARANG", "KODE BARANG"],
             "price_col_letter": "M4",
@@ -125,7 +125,7 @@ SPECS = {
             "price_headers": ["Harga diskon", "Discount Price", "Harga Diskon"],
         },
         "pricelist": {
-            "sheet_name": "change",
+            "sheet_name": "CHANGE",
             "header_row": 2,
             "sku_header_candidates": ["KODEBARANG", "KODE BARANG"],
             "price_col_letter": "M4",
@@ -159,7 +159,7 @@ SPECS = {
             ],
         },
         "pricelist": {
-            "sheet_name": "change",
+            "sheet_name": "CHANGE",
             "header_row": 2,
             "sku_header_candidates": ["KODEBARANG", "KODE BARANG"],
             "price_col_letter": "M3",
@@ -189,7 +189,7 @@ SPECS = {
             ],
         },
         "pricelist": {
-            "sheet_name": "change",
+            "sheet_name": "CHANGE",
             "header_row": 2,
             "sku_header_candidates": ["KODEBARANG", "KODE BARANG"],
             "price_col_letter": "M4",  # ✅ PM = M4
@@ -1266,4 +1266,5 @@ with tab_st:
         update_stok("tiktok", "st_tt", "Upload File Mass Update (TikTok Stok)")
     with s2:
         update_stok("shopee", "st_sp", "Upload File Mass Update (Shopee Stok)")
+
 
