@@ -357,7 +357,7 @@ def cached_build_pricelist_map(
         if col_letter in tried:
             continue
         tried.append(col_letter)
-        price_col = excel_col(col_letter)
+        price_col = find_col_by_headers(ws, header_row, [col_letter])
 
         out: Dict[str, int] = {}
         for r in range(header_row + 1, ws.max_row + 1):
@@ -1247,4 +1247,5 @@ with tab_st:
         update_stok("tiktok", "st_tt", "Upload File Mass Update (TikTok Stok)")
     with s2:
         update_stok("shopee", "st_sp", "Upload File Mass Update (Shopee Stok)")
+
 
