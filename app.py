@@ -1,381 +1,285 @@
+# app.py
+
 import streamlit as st
 import pandas as pd
-import zipfile
-from io import BytesIO
 
-st.set_page_config(page_title="Marketplace Tools", layout="wide")
-
-st.title("Marketplace Bulk Tools")
-
-# ==============================
-# HELPER FUNCTIONS
-# ==============================
-
-def load_pricelist(file):
-
-    df = pd.read_excel(file)
-
-    price_map = {}
-
-    for _, row in df.iterrows():
-
-        sku = str(row[0]).strip()
-        price = float(row[1])
-
-        if price < 1000000:
-            price *= 1000
-
-        price_map[sku] = price
-
-    return price_map
-
-
-def load_addon(file):
-
-    df = pd.read_excel(file)
-
-    addon_map = {}
-
-    for _, row in df.iterrows():
-
-        addon = str(row[0]).strip()
-        price = float(row[1])
-
-        if price < 1000000:
-            price *= 1000
-
-        addon_map[addon] = price
-
-    return addon_map
-
-
-def process_price_file(template, price_map, addon_map):
-
-    df = pd.read_excel(template)
-
-    changed_rows = []
-
-    for i, row in df.iterrows():
-
-        try:
-
-            sku = str(row["SKU"]).strip()
-
-            base_price = price_map.get(sku)
-
-            if base_price is None:
-                continue
-
-            addon = str(row.get("Addon", "")).strip()
-
-            addon_price = addon_map.get(addon, 0)
-
-            new_price = base_price + addon_price
-
-            old_price = row["Price"]
-
-            if new_price != old_price:
-
-                row["Price"] = new_price
-
-                changed_rows.append(row)
-
-        except:
-            continue
-
-    if not changed_rows:
-        return None
-
-    result_df = pd.DataFrame(changed_rows)
-
-    output = BytesIO()
-
-    result_df.to_excel(output, index=False)
-
-    return output.getvalue()
-
-
-def process_stock_file(template):
-
-    df = pd.read_excel(template)
-
-    changed_rows = []
-
-    for i, row in df.iterrows():
-
-        try:
-
-            new_stock = row["NewStock"]
-            old_stock = row["Stock"]
-
-            if new_stock != old_stock:
-
-                row["Stock"] = new_stock
-
-                changed_rows.append(row)
-
-        except:
-            continue
-
-    if not changed_rows:
-        return None
-
-    result_df = pd.DataFrame(changed_rows)
-
-    output = BytesIO()
-
-    result_df.to_excel(output, index=False)
-
-    return output.getvalue()
-
-
-def make_zip(results):
-
-    zip_buffer = BytesIO()
-
-    with zipfile.ZipFile(zip_buffer, "w") as z:
-
-        for name, data in results:
-
-            z.writestr(name, data)
-
-    return zip_buffer.getvalue()
-
-
-# ==============================
-# SIDEBAR MENU
-# ==============================
-
-menu = st.sidebar.radio(
-    "Menu",
-    [
-        "Harga Normal",
-        "Harga Coret",
-        "Update Stok"
-    ]
+from specs import SPECS
+from engine import (
+    build_pricelist_map,
+    build_addon_map,
+    process_price_inplace,
+    process_stock_inplace,
+    process_tiktok_discount,
+    make_zip,
 )
 
-# ==============================
-# HARGA NORMAL
-# ==============================
+st.set_page_config(page_title="sellerengine", page_icon="⚙️", layout="wide")
+st.title("sellerengine")
+
+menu = st.sidebar.radio("Menu", ["Harga Normal", "Harga Coret", "Update Stok"])
 
 if menu == "Harga Normal":
+    marketplace = st.selectbox("Pilih Marketplace", ["tiktok", "shopee", "powermerchant"])
+    job_key = ("harga_normal", marketplace)
 
-    st.header("Harga Normal")
+    st.subheader(f"Harga Normal — {marketplace.upper()}")
 
-    templates = st.file_uploader(
-        "Upload Template",
-        type=["xlsx"],
-        accept_multiple_files=True
-    )
+    templates = st.file_uploader("Upload Template (boleh multi file)", type=["xlsx"], accept_multiple_files=True)
+    pricelist = st.file_uploader("Upload Pricelist", type=["xlsx"])
+    addon = st.file_uploader("Upload Addon", type=["xlsx"])
 
-    pricelist = st.file_uploader(
-        "Upload Pricelist",
-        type=["xlsx"]
-    )
+    if st.button("PROCESS", type="primary"):
+        spec = SPECS[job_key]
 
-    addon = st.file_uploader(
-        "Upload Addon",
-        type=["xlsx"]
-    )
-
-    if st.button("PROCESS"):
-
-        if not templates or not pricelist or not addon:
-            st.error("Upload semua file dulu")
+        if not templates or pricelist is None or addon is None:
+            st.error("Upload template + pricelist + addon dulu.")
             st.stop()
 
-        price_map = load_pricelist(pricelist)
-        addon_map = load_addon(addon)
+        pl_map = build_pricelist_map(
+            pricelist.getvalue(),
+            header_row=spec["pricelist"]["header_row"],
+            sku_header_candidates=spec["pricelist"]["sku_header_candidates"],
+            price_col_letter=spec["pricelist"]["price_col_letter"],
+        )
+        addon_map = build_addon_map(
+            addon.getvalue(),
+            code_candidates=spec["addon"]["code_candidates"],
+            price_candidates=spec["addon"]["price_candidates"],
+        )
 
-        results = []
+        out_files = []
+        all_changes = []
 
-        progress = st.progress(0)
-
-        for i, template in enumerate(templates):
-
-            result = process_price_file(template, price_map, addon_map)
-
-            if result:
-
-                filename = template.name.replace(".xlsx", "_result.xlsx")
-
-                results.append((filename, result))
-
-            progress.progress((i + 1) / len(templates))
-
-        if not results:
-
-            st.warning("Tidak ada perubahan")
-
-        elif len(results) == 1:
-
-            st.download_button(
-                "Download Result",
-                results[0][1],
-                file_name=results[0][0]
+        prog = st.progress(0)
+        for i, f in enumerate(templates):
+            out_bytes, changes, _issues = process_price_inplace(
+                template_bytes=f.getvalue(),
+                template_name=f.name,
+                spec=spec,
+                pricelist_map=pl_map,
+                addon_map=addon_map,
             )
+            if out_bytes:
+                out_files.append((f.name.replace(".xlsx", "_changed.xlsx"), out_bytes))
+            all_changes.extend(changes)
+            prog.progress((i + 1) / len(templates))
 
+        if all_changes:
+            df = pd.DataFrame([c.__dict__ for c in all_changes])
+            st.dataframe(df.head(300), use_container_width=True)
+
+        if not out_files:
+            st.warning("Tidak ada baris yang berubah.")
+        elif len(out_files) == 1:
+            name, data = out_files[0]
+            st.download_button("Download XLSX", data=data, file_name=name, mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
         else:
+            z = make_zip(out_files)
+            st.download_button("Download ZIP", data=z, file_name="hasil_harga_normal.zip", mime="application/zip")
 
-            zip_file = make_zip(results)
-
-            st.download_button(
-                "Download ZIP",
-                zip_file,
-                file_name="results.zip"
-            )
-
-
-# ==============================
-# HARGA CORET
-# ==============================
 
 elif menu == "Harga Coret":
+    marketplace = st.selectbox("Pilih Marketplace", ["tiktok (discount template)", "shopee", "powermerchant"])
 
-    st.header("Harga Coret")
+    if marketplace.startswith("tiktok"):
+        job_key = ("harga_coret_tiktok_discount", "tiktok")
+        spec = SPECS[job_key]
 
-    templates = st.file_uploader(
-        "Upload Template",
-        type=["xlsx"],
-        accept_multiple_files=True
-    )
+        st.subheader("Harga Coret — TikTok (Product Discount Template, split 1000)")
 
-    pricelist = st.file_uploader(
-        "Upload Pricelist",
-        type=["xlsx"]
-    )
+        templates = st.file_uploader("Upload Template TikTok Discount (boleh multi file)", type=["xlsx"], accept_multiple_files=True)
+        pricelist = st.file_uploader("Upload Pricelist", type=["xlsx"])
+        addon = st.file_uploader("Upload Addon", type=["xlsx"])
+        discount_rp = st.number_input("Diskon (Rp)", min_value=0, value=0, step=1000)
+        only_changed = st.checkbox("Hanya yang berubah harga", value=True)
 
-    addon = st.file_uploader(
-        "Upload Addon",
-        type=["xlsx"]
-    )
+        if st.button("PROCESS", type="primary"):
+            if not templates or pricelist is None or addon is None:
+                st.error("Upload template + pricelist + addon dulu.")
+                st.stop()
 
-    if st.button("PROCESS"):
+            pl_map = build_pricelist_map(
+                pricelist.getvalue(),
+                header_row=spec["pricelist"]["header_row"],
+                sku_header_candidates=spec["pricelist"]["sku_header_candidates"],
+                price_col_letter=spec["pricelist"]["price_col_letter"],
+            )
+            addon_map = build_addon_map(
+                addon.getvalue(),
+                code_candidates=spec["addon"]["code_candidates"],
+                price_candidates=spec["addon"]["price_candidates"],
+            )
 
-        price_map = load_pricelist(pricelist)
-        addon_map = load_addon(addon)
+            out_files = []
+            previews = []
 
-        results = []
+            prog = st.progress(0)
+            for i, f in enumerate(templates):
+                files_out, df_prev = process_tiktok_discount(
+                    template_bytes=f.getvalue(),
+                    template_name=f.name,
+                    spec=spec,
+                    pricelist_map=pl_map,
+                    addon_map=addon_map,
+                    discount_rp=int(discount_rp),
+                    only_changed=only_changed,
+                )
+                out_files.extend(files_out)
+                if df_prev is not None and len(df_prev) > 0:
+                    previews.append(df_prev)
+                prog.progress((i + 1) / len(templates))
 
-        progress = st.progress(0)
+            if previews:
+                st.dataframe(pd.concat(previews, ignore_index=True).head(300), use_container_width=True)
 
-        for i, template in enumerate(templates):
+            if not out_files:
+                st.warning("Tidak ada output (mungkin tidak ada yang berubah / semua skip).")
+            elif len(out_files) == 1:
+                name, data = out_files[0]
+                st.download_button("Download XLSX", data=data, file_name=name, mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+            else:
+                z = make_zip(out_files)
+                st.download_button("Download ZIP", data=z, file_name="tiktok_discount_output.zip", mime="application/zip")
 
-            df = pd.read_excel(template)
+    else:
+        marketplace_key = "shopee" if marketplace == "shopee" else "powermerchant"
+        job_key = ("harga_coret", marketplace_key)
 
-            changed_rows = []
+        st.subheader(f"Harga Coret — {marketplace_key.upper()}")
 
-            for _, row in df.iterrows():
+        templates = st.file_uploader("Upload Template (boleh multi file)", type=["xlsx"], accept_multiple_files=True)
+        pricelist = st.file_uploader("Upload Pricelist", type=["xlsx"])
+        addon = st.file_uploader("Upload Addon", type=["xlsx"])
 
-                try:
+        if st.button("PROCESS", type="primary"):
+            spec = SPECS[job_key]
+            if not templates or pricelist is None or addon is None:
+                st.error("Upload template + pricelist + addon dulu.")
+                st.stop()
 
-                    sku = str(row["SKU"]).strip()
+            pl_map = build_pricelist_map(
+                pricelist.getvalue(),
+                header_row=spec["pricelist"]["header_row"],
+                sku_header_candidates=spec["pricelist"]["sku_header_candidates"],
+                price_col_letter=spec["pricelist"]["price_col_letter"],
+            )
+            addon_map = build_addon_map(
+                addon.getvalue(),
+                code_candidates=spec["addon"]["code_candidates"],
+                price_candidates=spec["addon"]["price_candidates"],
+            )
 
-                    base_price = price_map.get(sku)
+            out_files = []
+            prog = st.progress(0)
+            for i, f in enumerate(templates):
+                out_bytes, _changes, _issues = process_price_inplace(
+                    template_bytes=f.getvalue(),
+                    template_name=f.name,
+                    spec=spec,
+                    pricelist_map=pl_map,
+                    addon_map=addon_map,
+                )
+                if out_bytes:
+                    out_files.append((f.name.replace(".xlsx", "_changed.xlsx"), out_bytes))
+                prog.progress((i + 1) / len(templates))
 
-                    if base_price is None:
-                        continue
+            if not out_files:
+                st.warning("Tidak ada baris yang berubah.")
+            elif len(out_files) == 1:
+                name, data = out_files[0]
+                st.download_button("Download XLSX", data=data, file_name=name, mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+            else:
+                z = make_zip(out_files)
+                st.download_button("Download ZIP", data=z, file_name="hasil_harga_coret.zip", mime="application/zip")
 
-                    addon = str(row.get("Addon", "")).strip()
 
-                    addon_price = addon_map.get(addon, 0)
+else:  # Update Stok
+    marketplace = st.selectbox("Pilih Marketplace", ["tiktok", "shopee"])
+    job_key = ("update_stok", marketplace)
+    spec = SPECS[job_key]
 
-                    new_price = base_price + addon_price
+    st.subheader(f"Update Stok — {marketplace.upper()}")
 
-                    if new_price != row["Price"]:
+    templates = st.file_uploader("Upload Template (boleh multi file)", type=["xlsx"], accept_multiple_files=True)
 
-                        row["Price"] = new_price
+    st.caption("Upload file stok (XLSX): minimal ada kolom KODEBARANG/KODE BARANG dan kolom TOT (stok nasional).")
+    stock_file = st.file_uploader("Upload File Stok", type=["xlsx"])
 
-                        changed_rows.append(row)
+    if st.button("PROCESS", type="primary"):
+        if not templates or stock_file is None:
+            st.error("Upload template + file stok dulu.")
+            st.stop()
 
-                except:
-                    continue
+        # Build stock map dari file stok: ambil SKU dari KODEBARANG/KODE BARANG dan qty dari TOT
+        from openpyxl import load_workbook
+        import io
+        import re
 
-            if not changed_rows:
+        def norm_sku(v) -> str:
+            s = ("" if v is None else str(v)).strip().upper()
+            if re.fullmatch(r"\d+\.0", s):
+                s = s[:-2]
+            s = re.sub(r"\s+", "", s)
+            return s
+
+        wb = load_workbook(io.BytesIO(stock_file.getvalue()), data_only=True)
+        ws = wb.active
+
+        # cari header row (scan 1..12), cari kolom KODEBARANG dan TOT
+        header_row = None
+        sku_col = None
+        tot_col = None
+
+        for r in range(1, min(12, ws.max_row) + 1):
+            row_map = {}
+            for c in range(1, ws.max_column + 1):
+                row_map[(ws.cell(r, c).value or "").__str__().strip().upper()] = c
+
+            for k in ["KODEBARANG", "KODE BARANG", "SKU"]:
+                if k in row_map:
+                    sku_col = row_map[k]
+                    break
+            if "TOT" in row_map:
+                tot_col = row_map["TOT"]
+
+            if sku_col and tot_col:
+                header_row = r
+                break
+
+        if not (header_row and sku_col and tot_col):
+            st.error("File stok: tidak menemukan kolom KODEBARANG/KODE BARANG dan TOT.")
+            st.stop()
+
+        stock_map = {}
+        for r in range(header_row + 1, ws.max_row + 1):
+            sku = norm_sku(ws.cell(r, sku_col).value)
+            if not sku:
                 continue
+            qty = ws.cell(r, tot_col).value
+            try:
+                qty = int(float(qty))
+            except Exception:
+                continue
+            stock_map[sku] = qty
 
-            df_out = pd.DataFrame(changed_rows)
-
-            chunks = [df_out[i:i+1000] for i in range(0, len(df_out), 1000)]
-
-            for idx, chunk in enumerate(chunks):
-
-                output = BytesIO()
-
-                chunk.to_excel(output, index=False)
-
-                filename = f"{template.name}_part{idx+1}.xlsx"
-
-                results.append((filename, output.getvalue()))
-
-            progress.progress((i + 1) / len(templates))
-
-        if len(results) == 1:
-
-            st.download_button(
-                "Download",
-                results[0][1],
-                file_name=results[0][0]
+        out_files = []
+        prog = st.progress(0)
+        for i, f in enumerate(templates):
+            out_bytes, _changes = process_stock_inplace(
+                template_bytes=f.getvalue(),
+                template_name=f.name,
+                spec=spec,
+                stock_value_map=stock_map,
             )
+            if out_bytes:
+                out_files.append((f.name.replace(".xlsx", "_stok_changed.xlsx"), out_bytes))
+            prog.progress((i + 1) / len(templates))
 
+        if not out_files:
+            st.warning("Tidak ada baris yang berubah.")
+        elif len(out_files) == 1:
+            name, data = out_files[0]
+            st.download_button("Download XLSX", data=data, file_name=name, mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
         else:
-
-            zip_file = make_zip(results)
-
-            st.download_button(
-                "Download ZIP",
-                zip_file,
-                file_name="results.zip"
-            )
-
-
-# ==============================
-# UPDATE STOK
-# ==============================
-
-elif menu == "Update Stok":
-
-    st.header("Update Stok")
-
-    templates = st.file_uploader(
-        "Upload Template",
-        type=["xlsx"],
-        accept_multiple_files=True
-    )
-
-    if st.button("PROCESS"):
-
-        results = []
-
-        progress = st.progress(0)
-
-        for i, template in enumerate(templates):
-
-            result = process_stock_file(template)
-
-            if result:
-
-                filename = template.name.replace(".xlsx", "_stok.xlsx")
-
-                results.append((filename, result))
-
-            progress.progress((i + 1) / len(templates))
-
-        if len(results) == 1:
-
-            st.download_button(
-                "Download Result",
-                results[0][1],
-                file_name=results[0][0]
-            )
-
-        else:
-
-            zip_file = make_zip(results)
-
-            st.download_button(
-                "Download ZIP",
-                zip_file,
-                file_name="stok_results.zip"
-            )
+            z = make_zip(out_files)
+            st.download_button("Download ZIP", data=z, file_name="hasil_update_stok.zip", mime="application/zip")
