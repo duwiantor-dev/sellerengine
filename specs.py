@@ -12,11 +12,13 @@ SPECS = {
             "price_headers": ["Harga Ritel (Mata Uang Lokal)"],
         },
         "pricelist": {
+            "sheet_name": "change",   # ✅ baca sheet change saja
             "header_row": 2,
             "sku_header_candidates": ["KODEBARANG", "KODE BARANG", "SKU", "SKU NO", "SKU_NO"],
             "price_col_letter": "M3",
         },
         "addon": {
+            "sheet_name": None,  # auto scan
             "code_candidates": ["addon_code", "ADDON_CODE", "Addon Code", "Kode", "KODE", "KODE ADDON", "KODE_ADDON"],
             "price_candidates": ["harga", "HARGA", "Price", "PRICE", "Harga"],
         },
@@ -30,19 +32,19 @@ SPECS = {
             "price_headers": ["Harga Ritel (Mata Uang Lokal)"],
         },
         "pricelist": {
+            "sheet_name": "change",   # ✅ baca sheet change saja
             "header_row": 2,
             "sku_header_candidates": ["KODEBARANG", "KODE BARANG", "SKU", "SKU NO", "SKU_NO"],
-            "price_col_letter": "M4",
+            "price_col_letter": "M4",  # ✅ PM = M4
         },
         "addon": {
+            "sheet_name": None,
             "code_candidates": ["addon_code", "ADDON_CODE", "Addon Code", "Kode", "KODE", "KODE ADDON", "KODE_ADDON"],
             "price_candidates": ["harga", "HARGA", "Price", "PRICE", "Harga"],
         },
     },
 
     ("harga_normal", "shopee"): {
-        # Kalau template Shopee normal kamu beda header/data row,
-        # ubah 2 angka ini saja.
         "template": {
             "header_row": 3,
             "data_start_row": 7,
@@ -50,19 +52,41 @@ SPECS = {
             "price_headers": ["Harga", "Price", "Harga Normal", "Harga Ritel (Mata Uang Lokal)"],
         },
         "pricelist": {
+            "sheet_name": "change",   # ✅ baca sheet change saja
             "header_row": 2,
             "sku_header_candidates": ["KODEBARANG", "KODE BARANG", "SKU", "SKU NO", "SKU_NO"],
             "price_col_letter": "M4",
         },
         "addon": {
+            "sheet_name": None,
+            "code_candidates": ["addon_code", "ADDON_CODE", "Addon Code", "Kode", "KODE", "KODE ADDON", "KODE_ADDON"],
+            "price_candidates": ["harga", "HARGA", "Price", "PRICE", "Harga"],
+        },
+    },
+
+    # ✅ BigSeller Harga Normal
+    ("harga_normal", "bigseller"): {
+        "template": {
+            "header_row": 1,
+            "data_start_row": 2,
+            "sku_headers": ["SKU"],
+            "price_headers": ["Harga"],
+        },
+        "pricelist": {
+            "sheet_name": "change",   # ✅ baca sheet change saja
+            "header_row": 2,
+            "sku_header_candidates": ["KODEBARANG", "KODE BARANG", "SKU", "SKU NO", "SKU_NO"],
+            "price_col_letter": "M4",  # kalau bigseller kamu pakai M4, kalau ternyata M3 tinggal ganti di sini
+        },
+        "addon": {
+            "sheet_name": None,
             "code_candidates": ["addon_code", "ADDON_CODE", "Addon Code", "Kode", "KODE", "KODE ADDON", "KODE_ADDON"],
             "price_candidates": ["harga", "HARGA", "Price", "PRICE", "Harga"],
         },
     },
 
     # =========================
-    # HARGA CORET (PROMOSI) - in-place
-    # Diskon manual akan dikurangkan di engine.py
+    # HARGA CORET (in-place) Shopee
     # =========================
     ("harga_coret", "shopee"): {
         "template": {
@@ -72,29 +96,81 @@ SPECS = {
             "price_headers": ["Harga diskon", "Discount Price", "Harga Diskon"],
         },
         "pricelist": {
+            "sheet_name": "change",   # ✅ change
             "header_row": 2,
             "sku_header_candidates": ["KODEBARANG", "KODE BARANG", "SKU", "SKU NO", "SKU_NO"],
             "price_col_letter": "M4",
         },
         "addon": {
+            "sheet_name": None,
             "code_candidates": ["addon_code", "ADDON_CODE", "Addon Code", "Kode", "KODE", "KODE ADDON", "KODE_ADDON"],
             "price_candidates": ["harga", "HARGA", "Price", "PRICE", "Harga"],
         },
     },
 
-    ("harga_coret", "powermerchant"): {
-        "template": {
-            "header_row": 3,
+    # =========================
+    # HARGA CORET PowerMerchant = TEMPLATE DISCOUNT (sama kayak TikTok) ✅
+    # (Output = Product Discount + split 1000)
+    # =========================
+    ("harga_coret_discount_template", "tiktok"): {
+        "input": {
             "data_start_row": 6,
-            "sku_headers": ["SKU Penjual", "Seller SKU"],
-            "price_headers": ["Harga Ritel (Mata Uang Lokal)"],
+            "col_product_id": "A",
+            "col_sku_id": "D",
+            "col_price": "F",
+            "col_stock": "G",
+            "col_seller_sku": "H",  # fallback E
+        },
+        "output": {
+            "max_rows_per_file": 1000,
+            "headers": [
+                "Product_id (wajib)",
+                "SKU_id (wajib)",
+                "Harga Penawaran (wajib)",
+                "Total Stok Promosi (opsional)\n1. Total Stok Promosi≤ Stok \n2. Jika tidak diisi artinya tidak terbatas",
+                "Batas Pembelian (opsional)\n1. 1 ≤ Batas pembelian≤ 99\n2. Jika tidak diisi artinya tidak terbatas",
+            ],
         },
         "pricelist": {
+            "sheet_name": "change",
             "header_row": 2,
             "sku_header_candidates": ["KODEBARANG", "KODE BARANG", "SKU", "SKU NO", "SKU_NO"],
-            "price_col_letter": "M4",
+            "price_col_letter": "M3",   # TikTok = M3
         },
         "addon": {
+            "sheet_name": None,
+            "code_candidates": ["addon_code", "ADDON_CODE", "Addon Code", "Kode", "KODE", "KODE ADDON", "KODE_ADDON"],
+            "price_candidates": ["harga", "HARGA", "Price", "PRICE", "Harga"],
+        },
+    },
+
+    ("harga_coret_discount_template", "powermerchant"): {
+        "input": {
+            "data_start_row": 6,
+            "col_product_id": "A",
+            "col_sku_id": "D",
+            "col_price": "F",
+            "col_stock": "G",
+            "col_seller_sku": "H",  # fallback E
+        },
+        "output": {
+            "max_rows_per_file": 1000,
+            "headers": [
+                "Product_id (wajib)",
+                "SKU_id (wajib)",
+                "Harga Penawaran (wajib)",
+                "Total Stok Promosi (opsional)\n1. Total Stok Promosi≤ Stok \n2. Jika tidak diisi artinya tidak terbatas",
+                "Batas Pembelian (opsional)\n1. 1 ≤ Batas pembelian≤ 99\n2. Jika tidak diisi artinya tidak terbatas",
+            ],
+        },
+        "pricelist": {
+            "sheet_name": "change",
+            "header_row": 2,
+            "sku_header_candidates": ["KODEBARANG", "KODE BARANG", "SKU", "SKU NO", "SKU_NO"],
+            "price_col_letter": "M4",   # ✅ PM = M4
+        },
+        "addon": {
+            "sheet_name": None,
             "code_candidates": ["addon_code", "ADDON_CODE", "Addon Code", "Kode", "KODE", "KODE ADDON", "KODE_ADDON"],
             "price_candidates": ["harga", "HARGA", "Price", "PRICE", "Harga"],
         },
@@ -110,6 +186,10 @@ SPECS = {
             "sku_headers": ["SKU Penjual", "Seller SKU"],
             "stock_headers": ["Kuantitas", "Quantity", "Qty"],
         },
+        "stock_source": {
+            "sheets_from": "LAPTOP",
+            "sheets_to": "SER OTH CON",  # ✅ gabung sheet LAPTOP..SER OTH CON
+        },
     },
 
     ("update_stok", "shopee"): {
@@ -119,38 +199,9 @@ SPECS = {
             "sku_headers": ["SKU"],
             "stock_headers": ["Stok", "Stock"],
         },
-    },
-
-    # =========================
-    # TikTok discount template (Product Discount) + split 1000
-    # =========================
-    ("harga_coret_tiktok_discount", "tiktok"): {
-        "input": {
-            "data_start_row": 6,
-            "col_product_id": "A",
-            "col_sku_id": "D",
-            "col_price": "F",
-            "col_stock": "G",
-            "col_seller_sku": "H",  # fallback ke E jika kosong
-        },
-        "output": {
-            "max_rows_per_file": 1000,
-            "headers": [
-                "Product_id (wajib)",
-                "SKU_id (wajib)",
-                "Harga Penawaran (wajib)",
-                "Total Stok Promosi (opsional)\n1. Total Stok Promosi≤ Stok \n2. Jika tidak diisi artinya tidak terbatas",
-                "Batas Pembelian (opsional)\n1. 1 ≤ Batas pembelian≤ 99\n2. Jika tidak diisi artinya tidak terbatas",
-            ],
-        },
-        "pricelist": {
-            "header_row": 2,
-            "sku_header_candidates": ["KODEBARANG", "KODE BARANG", "SKU", "SKU NO", "SKU_NO"],
-            "price_col_letter": "M3",
-        },
-        "addon": {
-            "code_candidates": ["addon_code", "ADDON_CODE", "Addon Code", "Kode", "KODE", "KODE ADDON", "KODE_ADDON"],
-            "price_candidates": ["harga", "HARGA", "Price", "PRICE", "Harga"],
+        "stock_source": {
+            "sheets_from": "LAPTOP",
+            "sheets_to": "SER OTH CON",
         },
     },
 }
