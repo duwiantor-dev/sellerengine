@@ -354,15 +354,24 @@ def cached_build_pricelist_map(
 
     out: Dict[str, int] = {}
     for r in range(header_row + 1, ws.max_row + 1):
-        sku_raw = _norm_str(safe_cell_value(ws.cell(row=r, column=sku_col)))
-        if not sku_raw:
-            continue
-        sku = norm_sku_key(sku_raw)  # ✅ normalisasi di pricelist
-        pv = parse_int_maybe(safe_cell_value(ws.cell(row=r, column=price_col)))
-        pv = apply_multiplier_if_needed(pv)  # ✅ auto x1000
-        if pv is None:
-            continue
-        out[sku] = int(pv)
+
+    sku_no = safe_cell_value(ws.cell(row=r, column=1))
+    if sku_no is None:
+        continue
+
+    sku_raw = _norm_str(safe_cell_value(ws.cell(row=r, column=sku_col)))
+    if not sku_raw:
+        continue
+
+    sku = norm_sku_key(sku_raw)
+
+    pv = parse_int_maybe(safe_cell_value(ws.cell(row=r, column=price_col)))
+    pv = apply_multiplier_if_needed(pv)
+
+    if pv is None:
+        continue
+
+    out[sku] = int(pv)
     return out
 
 @st.cache_data(show_spinner=False)
@@ -401,15 +410,24 @@ def cached_build_addon_map(
 
     out: Dict[str, int] = {}
     for r in range(header_row + 1, ws.max_row + 1):
-        code_raw = _norm_str(safe_cell_value(ws.cell(row=r, column=code_col)))
-        if not code_raw:
-            continue
-        code = norm_sku_key(code_raw)  # ✅ normalisasi addon code juga
-        pv = parse_int_maybe(safe_cell_value(ws.cell(row=r, column=price_col)))
-        pv = apply_multiplier_if_needed(pv)  # ✅ auto x1000
-        if pv is None:
-            continue
-        out[code] = int(pv)
+
+    sku_no = safe_cell_value(ws.cell(row=r, column=1))
+    if sku_no is None:
+        continue
+
+    sku_raw = _norm_str(safe_cell_value(ws.cell(row=r, column=sku_col)))
+    if not sku_raw:
+        continue
+
+    sku = norm_sku_key(sku_raw)
+
+    pv = parse_int_maybe(safe_cell_value(ws.cell(row=r, column=price_col)))
+    pv = apply_multiplier_if_needed(pv)
+
+    if pv is None:
+        continue
+
+    out[sku] = int(pv)
     return out
 
 # =========================
@@ -1266,5 +1284,6 @@ with tab_st:
         update_stok("tiktok", "st_tt", "Upload File Mass Update (TikTok Stok)")
     with s2:
         update_stok("shopee", "st_sp", "Upload File Mass Update (Shopee Stok)")
+
 
 
