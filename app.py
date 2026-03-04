@@ -51,7 +51,7 @@ SPECS = {
         "pricelist": {
             "sheet_name": "change",
             "header_row": 2,
-            "sku_header_candidates": ["KODEBARANG", "KODE BARANG", "SKU", "SKU NO", "SKU_NO"],
+            "sku_header_candidates": ["KODEBARANG", "KODE BARANG"],
             "price_col_letter": "M3",
         },
         "addon": {
@@ -69,7 +69,7 @@ SPECS = {
         "pricelist": {
             "sheet_name": "change",
             "header_row": 2,
-            "sku_header_candidates": ["KODEBARANG", "KODE BARANG", "SKU", "SKU NO", "SKU_NO"],
+            "sku_header_candidates": ["KODEBARANG", "KODE BARANG"],
             "price_col_letter": "M4",
         },
         "addon": {
@@ -87,7 +87,7 @@ SPECS = {
         "pricelist": {
             "sheet_name": "change",
             "header_row": 2,
-            "sku_header_candidates": ["KODEBARANG", "KODE BARANG", "SKU", "SKU NO", "SKU_NO"],
+            "sku_header_candidates": ["KODEBARANG", "KODE BARANG"],
             "price_col_letter": "M4",
         },
         "addon": {
@@ -105,7 +105,7 @@ SPECS = {
         "pricelist": {
             "sheet_name": "change",
             "header_row": 2,
-            "sku_header_candidates": ["KODEBARANG", "KODE BARANG", "SKU", "SKU NO", "SKU_NO"],
+            "sku_header_candidates": ["KODEBARANG", "KODE BARANG"],
             "price_col_letter": "M4",
         },
         "addon": {
@@ -127,7 +127,7 @@ SPECS = {
         "pricelist": {
             "sheet_name": "change",
             "header_row": 2,
-            "sku_header_candidates": ["KODEBARANG", "KODE BARANG", "SKU", "SKU NO", "SKU_NO"],
+            "sku_header_candidates": ["KODEBARANG", "KODE BARANG"],
             "price_col_letter": "M4",
         },
         "addon": {
@@ -161,7 +161,7 @@ SPECS = {
         "pricelist": {
             "sheet_name": "change",
             "header_row": 2,
-            "sku_header_candidates": ["KODEBARANG", "KODE BARANG", "SKU", "SKU NO", "SKU_NO"],
+            "sku_header_candidates": ["KODEBARANG", "KODE BARANG"],
             "price_col_letter": "M3",
         },
         "addon": {
@@ -191,7 +191,7 @@ SPECS = {
         "pricelist": {
             "sheet_name": "change",
             "header_row": 2,
-            "sku_header_candidates": ["KODEBARANG", "KODE BARANG", "SKU", "SKU NO", "SKU_NO"],
+            "sku_header_candidates": ["KODEBARANG", "KODE BARANG"],
             "price_col_letter": "M4",
         },
         "addon": {
@@ -1247,3 +1247,4 @@ with tab_st:
         update_stok("tiktok", "st_tt", "Upload File Mass Update (TikTok Stok)")
     with s2:
         update_stok("shopee", "st_sp", "Upload File Mass Update (Shopee Stok)")
+
