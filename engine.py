@@ -4,13 +4,12 @@ import io
 import re
 import zipfile
 from dataclasses import dataclass
-from typing import Dict, List, Optional, Tuple, Iterable
+from typing import Dict, List, Optional, Tuple
 
 import pandas as pd
 from openpyxl import load_workbook, Workbook
 from openpyxl.cell.cell import MergedCell
 from openpyxl.worksheet.worksheet import Worksheet
-
 
 SMALL_TO_THOUSAND_THRESHOLD = 1_000_000
 AUTO_MULTIPLIER_FOR_SMALL = 1000
@@ -90,7 +89,6 @@ def build_pricelist_map(pricelist_bytes: bytes, header_row: int, sku_header_cand
     wb = load_workbook(io.BytesIO(pricelist_bytes), data_only=True)
     ws = wb.active
 
-    # cari SKU col by header
     sku_candidates_norm = {normalize_header(x) for x in sku_header_candidates}
     sku_col = None
     for c in range(1, ws.max_column + 1):
@@ -120,28 +118,29 @@ def build_addon_map(addon_bytes: bytes, code_candidates: List[str], price_candid
     wb = load_workbook(io.BytesIO(addon_bytes), data_only=True)
     ws = wb.active
 
-    # scan 1..30 untuk header
     code_col = None
     price_col = None
+    header_row = None
+
     for r in range(1, min(30, ws.max_row) + 1):
-        # map header row
-        m = {}
+        row_map = {}
         for c in range(1, ws.max_column + 1):
-            m[normalize_header(safe_cell_value(ws.cell(row=r, column=c)))] = c
+            row_map[normalize_header(safe_cell_value(ws.cell(row=r, column=c)))] = c
 
         for cand in code_candidates:
-            if normalize_header(cand) in m:
-                code_col = m[normalize_header(cand)]
+            if normalize_header(cand) in row_map:
+                code_col = row_map[normalize_header(cand)]
                 break
         for cand in price_candidates:
-            if normalize_header(cand) in m:
-                price_col = m[normalize_header(cand)]
+            if normalize_header(cand) in row_map:
+                price_col = row_map[normalize_header(cand)]
                 break
 
         if code_col and price_col:
             header_row = r
             break
-    else:
+
+    if not (code_col and price_col and header_row):
         raise ValueError("Addon mapping: header tidak ditemukan (butuh addon_code & harga).")
 
     out: Dict[str, int] = {}
@@ -161,14 +160,11 @@ def split_sku_addons(sku_full: str) -> Tuple[str, List[str]]:
     parts = [p.strip() for p in _norm_str(sku_full).split("+") if p.strip()]
     if not parts:
         return "", []
-    base = parts[0]
-    addons = parts[1:]
-    return base, addons
+    return parts[0], parts[1:]
 
 
 def keep_only_rows(ws: Worksheet, data_start_row: int, keep_rows: List[int]) -> None:
     keep_set = set(keep_rows)
-    # delete from bottom
     for r in range(ws.max_row, data_start_row - 1, -1):
         if r not in keep_set:
             ws.delete_rows(r, 1)
@@ -182,15 +178,14 @@ def make_zip(files: List[Tuple[str, bytes]]) -> bytes:
     return buf.getvalue()
 
 
-# =========================
-# HANDLER: harga normal / coret (in-place edit template)
-# =========================
 def process_price_inplace(
     template_bytes: bytes,
     template_name: str,
     spec: dict,
     pricelist_map: Dict[str, int],
     addon_map: Dict[str, int],
+    discount_rp: int = 0,          # ✅ diskon manual untuk semua promosi
+    only_changed: bool = True,     # ✅ hanya yang berubah
 ) -> Tuple[Optional[bytes], List[ChangeRow], List[dict]]:
     wb = load_workbook(io.BytesIO(template_bytes))
     ws = wb.active
@@ -208,6 +203,10 @@ def process_price_inplace(
     changes: List[ChangeRow] = []
     issues: List[dict] = []
 
+    disc = int(discount_rp or 0)
+    if disc < 0:
+        disc = 0
+
     for r in range(data_start_row, ws.max_row + 1):
         sku_full = _norm_str(safe_cell_value(ws.cell(row=r, column=sku_col)))
         if not sku_full:
@@ -217,7 +216,6 @@ def process_price_inplace(
 
         base, addons = split_sku_addons(sku_full)
         if not base or base not in pricelist_map:
-            # skip sesuai requirement
             continue
 
         total = int(pricelist_map[base])
@@ -230,10 +228,16 @@ def process_price_inplace(
         if not ok:
             continue
 
-        if int(total) == int(old_val):
+        # ✅ diskon manual berlaku (kecuali stok)
+        total = total - disc
+        if total < 0:
+            total = 0
+
+        if only_changed and int(total) == int(old_val):
             continue
 
         ws.cell(row=r, column=price_col).value = int(total)
+
         changed_rows.append(r)
         changes.append(ChangeRow(template_name, r, sku_full, int(old_val), int(total), "changed"))
 
@@ -244,9 +248,6 @@ def process_price_inplace(
     return workbook_to_bytes(wb), changes, issues
 
 
-# =========================
-# HANDLER: stok (in-place edit template)
-# =========================
 def process_stock_inplace(
     template_bytes: bytes,
     template_name: str,
@@ -265,22 +266,21 @@ def process_stock_inplace(
     if sku_col is None or qty_col is None:
         raise ValueError(f"[{template_name}] kolom SKU/Stok tidak ditemukan (cek header).")
 
-    changed_rows: List[int] = []
-    changes: List[ChangeRow] = []
-
     def norm_sku(v) -> str:
         s = _norm_str(v).upper()
-        if not s:
-            return ""
         if re.fullmatch(r"\d+\.0", s):
             s = s[:-2]
         s = re.sub(r"\s+", "", s)
         return s
 
+    changed_rows: List[int] = []
+    changes: List[ChangeRow] = []
+
     for r in range(data_start_row, ws.max_row + 1):
         sku_full = _norm_str(safe_cell_value(ws.cell(row=r, column=sku_col)))
         if not sku_full:
             continue
+
         base, _addons = split_sku_addons(sku_full)
         key = norm_sku(base)
         if not key:
@@ -306,11 +306,8 @@ def process_stock_inplace(
     return workbook_to_bytes(wb), changes
 
 
-# =========================
-# HANDLER: TikTok Discount output template (max 1000 rows/file)
-# =========================
 def chunk_list(items: List[dict], size: int) -> List[List[dict]]:
-    return [items[i:i+size] for i in range(0, len(items), size)]
+    return [items[i:i + size] for i in range(0, len(items), size)]
 
 
 def build_tiktok_discount_workbook(rows: List[dict], headers: List[str]) -> bytes:
@@ -318,7 +315,6 @@ def build_tiktok_discount_workbook(rows: List[dict], headers: List[str]) -> byte
     ws = wb.active
     ws.title = "Sheet1"
 
-    # exact header row 1
     for i, h in enumerate(headers, start=1):
         ws.cell(row=1, column=i).value = h
 
@@ -328,7 +324,6 @@ def build_tiktok_discount_workbook(rows: List[dict], headers: List[str]) -> byte
         ws.cell(row=r, column=2).value = it.get("sku_id", "")
         ws.cell(row=r, column=3).value = it.get("offer_price", "")
         ws.cell(row=r, column=4).value = it.get("promo_stock", "")
-        # col 5 kosong
         r += 1
 
     return workbook_to_bytes(wb)
@@ -346,17 +341,14 @@ def process_tiktok_discount(
     wb = load_workbook(io.BytesIO(template_bytes), data_only=True)
     ws = wb.active
 
-    header_row = spec["input"]["header_row"]
     data_start_row = spec["input"]["data_start_row"]
 
-    # fixed col fallback
     col_product_id = excel_col(spec["input"]["col_product_id"])
     col_sku_id = excel_col(spec["input"]["col_sku_id"])
     col_price = excel_col(spec["input"]["col_price"])
     col_stock = excel_col(spec["input"]["col_stock"])
     col_seller_sku = excel_col(spec["input"]["col_seller_sku"])
 
-    # fallback: kalau H kosong, pakai E (sesuai file kamu)
     def col_is_all_empty(col_idx: int) -> bool:
         for rr in range(data_start_row, min(ws.max_row, data_start_row + 50) + 1):
             v = ws.cell(row=rr, column=col_idx).value
@@ -369,6 +361,10 @@ def process_tiktok_discount(
 
     out_rows: List[dict] = []
     preview_rows: List[dict] = []
+
+    disc = int(discount_rp or 0)
+    if disc < 0:
+        disc = 0
 
     for r in range(data_start_row, ws.max_row + 1):
         product_id = _norm_str(ws.cell(row=r, column=col_product_id).value)
@@ -397,7 +393,7 @@ def process_tiktok_discount(
         if not ok:
             continue
 
-        new_offer = total - int(discount_rp)
+        new_offer = total - disc
         if new_offer < 0:
             new_offer = 0
 
