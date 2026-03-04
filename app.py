@@ -1,4 +1,4 @@
-# app.py  (FULL - single file, with DEBUG MODE)
+# app.py  (FULL - single file, DEBUG MODE, fix pricelist data-start handling)
 import io
 import re
 import zipfile
@@ -49,9 +49,9 @@ SPECS = {
             "price_headers": ["Harga Ritel (Mata Uang Lokal)"],
         },
         "pricelist": {
-            "sheet_name": "CHANGE",
+            "sheet_name": "change",
             "header_row": 2,
-            "sku_header_candidates": ["KODEBARANG", "KODE BARANG"],
+            "sku_header_candidates": ["KODEBARANG", "KODE BARANG", "SKU", "SKU NO", "SKU_NO"],
             "price_col_letter": "M3",
         },
         "addon": {
@@ -67,9 +67,9 @@ SPECS = {
             "price_headers": ["Harga", "Price", "Harga Normal", "Harga Ritel (Mata Uang Lokal)"],
         },
         "pricelist": {
-            "sheet_name": "CHANGE",
+            "sheet_name": "change",
             "header_row": 2,
-            "sku_header_candidates": ["KODEBARANG", "KODE BARANG"],
+            "sku_header_candidates": ["KODEBARANG", "KODE BARANG", "SKU", "SKU NO", "SKU_NO"],
             "price_col_letter": "M4",
         },
         "addon": {
@@ -85,9 +85,9 @@ SPECS = {
             "price_headers": ["Harga Ritel (Mata Uang Lokal)"],
         },
         "pricelist": {
-            "sheet_name": "CHANGE",
+            "sheet_name": "change",
             "header_row": 2,
-            "sku_header_candidates": ["KODEBARANG", "KODE BARANG"],
+            "sku_header_candidates": ["KODEBARANG", "KODE BARANG", "SKU", "SKU NO", "SKU_NO"],
             "price_col_letter": "M4",
         },
         "addon": {
@@ -99,13 +99,13 @@ SPECS = {
         "template": {
             "header_row": 1,
             "data_start_row": 2,
-            "sku_headers": ["SKU"],     # ✅ BigSeller SKU
-            "price_headers": ["Harga"], # ✅ BigSeller Harga
+            "sku_headers": ["SKU"],
+            "price_headers": ["Harga"],
         },
         "pricelist": {
-            "sheet_name": "CHANGE",
+            "sheet_name": "change",
             "header_row": 2,
-            "sku_header_candidates": ["KODEBARANG", "KODE BARANG"],
+            "sku_header_candidates": ["KODEBARANG", "KODE BARANG", "SKU", "SKU NO", "SKU_NO"],
             "price_col_letter": "M4",
         },
         "addon": {
@@ -125,9 +125,9 @@ SPECS = {
             "price_headers": ["Harga diskon", "Discount Price", "Harga Diskon"],
         },
         "pricelist": {
-            "sheet_name": "CHANGE",
+            "sheet_name": "change",
             "header_row": 2,
-            "sku_header_candidates": ["KODEBARANG", "KODE BARANG"],
+            "sku_header_candidates": ["KODEBARANG", "KODE BARANG", "SKU", "SKU NO", "SKU_NO"],
             "price_col_letter": "M4",
         },
         "addon": {
@@ -146,7 +146,7 @@ SPECS = {
             "col_sku_id": "D",
             "col_price": "F",
             "col_stock": "G",
-            "col_seller_sku": "H",  # fallback E jika kosong
+            "col_seller_sku": "H",
         },
         "output": {
             "max_rows_per_file": 1000,
@@ -159,9 +159,9 @@ SPECS = {
             ],
         },
         "pricelist": {
-            "sheet_name": "CHANGE",
+            "sheet_name": "change",
             "header_row": 2,
-            "sku_header_candidates": ["KODEBARANG", "KODE BARANG"],
+            "sku_header_candidates": ["KODEBARANG", "KODE BARANG", "SKU", "SKU NO", "SKU_NO"],
             "price_col_letter": "M3",
         },
         "addon": {
@@ -189,10 +189,10 @@ SPECS = {
             ],
         },
         "pricelist": {
-            "sheet_name": "CHANGE",
+            "sheet_name": "change",
             "header_row": 2,
-            "sku_header_candidates": ["KODEBARANG", "KODE BARANG"],
-            "price_col_letter": "M4",  # ✅ PM = M4
+            "sku_header_candidates": ["KODEBARANG", "KODE BARANG", "SKU", "SKU NO", "SKU_NO"],
+            "price_col_letter": "M4",
         },
         "addon": {
             "code_candidates": ["addon_code", "ADDON_CODE", "Addon Code", "Kode", "KODE", "KODE ADDON", "KODE_ADDON"],
@@ -234,7 +234,6 @@ class ChangeRow:
     old_value: int
     new_value: int
     note: str
-
 
 # =========================
 # UTIL
@@ -305,7 +304,6 @@ def split_sku_addons(sku_full: str) -> Tuple[str, List[str]]:
     return parts[0], parts[1:]
 
 def norm_sku_key(v: str) -> str:
-    """Normalisasi SKU supaya match lebih sering: trim, uppercase, hapus spasi, ubah '123.0' => '123'."""
     s = _norm_str(v).upper()
     if re.fullmatch(r"\d+\.0", s):
         s = s[:-2]
@@ -326,7 +324,7 @@ def make_zip(files: List[Tuple[str, bytes]]) -> bytes:
     return buf.getvalue()
 
 # =========================
-# CACHE: build pricelist/addon map (biar cepat)
+# CACHE: build pricelist/addon map (FIX: skip TOTAL/spacer rows)
 # =========================
 @st.cache_data(show_spinner=False)
 def cached_build_pricelist_map(
@@ -350,29 +348,43 @@ def cached_build_pricelist_map(
     if sku_col is None:
         raise ValueError("Pricelist: kolom SKU tidak ditemukan (cek header row).")
 
-    price_col = excel_col(price_col_letter)
+    # ✅ fallback kolom harga (kalau 1 kolom kosong semua)
+    candidates = [price_col_letter, "M4", "M3", "N4", "N3", "L4", "L3"]
+    tried = []
+    best_map: Dict[str, int] = {}
 
-    out: Dict[str, int] = {}
-    for r in range(header_row + 1, ws.max_row + 1):
+    for col_letter in candidates:
+        if col_letter in tried:
+            continue
+        tried.append(col_letter)
+        price_col = excel_col(col_letter)
 
-    sku_no = safe_cell_value(ws.cell(row=r, column=1))
-    if sku_no is None:
-        continue
+        out: Dict[str, int] = {}
+        for r in range(header_row + 1, ws.max_row + 1):
+            # ✅ FIX UTAMA: hanya proses row yang punya SKU NO (col A) dan KODEBARANG (col sku_col)
+            sku_no = safe_cell_value(ws.cell(row=r, column=1))
+            if sku_no is None:
+                continue
 
-    sku_raw = _norm_str(safe_cell_value(ws.cell(row=r, column=sku_col)))
-    if not sku_raw:
-        continue
+            sku_raw = _norm_str(safe_cell_value(ws.cell(row=r, column=sku_col)))
+            if not sku_raw or sku_raw.upper() == "TOTAL":
+                continue
 
-    sku = norm_sku_key(sku_raw)
+            sku = norm_sku_key(sku_raw)
 
-    pv = parse_int_maybe(safe_cell_value(ws.cell(row=r, column=price_col)))
-    pv = apply_multiplier_if_needed(pv)
+            pv = parse_int_maybe(safe_cell_value(ws.cell(row=r, column=price_col)))
+            pv = apply_multiplier_if_needed(pv)  # auto x1000
+            if pv is None:
+                continue
 
-    if pv is None:
-        continue
+            out[sku] = int(pv)
 
-    out[sku] = int(pv)
-    return out
+        if len(out) > len(best_map):
+            best_map = out
+        if len(best_map) >= 1000:
+            break
+
+    return best_map
 
 @st.cache_data(show_spinner=False)
 def cached_build_addon_map(
@@ -410,28 +422,19 @@ def cached_build_addon_map(
 
     out: Dict[str, int] = {}
     for r in range(header_row + 1, ws.max_row + 1):
-
-    sku_no = safe_cell_value(ws.cell(row=r, column=1))
-    if sku_no is None:
-        continue
-
-    sku_raw = _norm_str(safe_cell_value(ws.cell(row=r, column=sku_col)))
-    if not sku_raw:
-        continue
-
-    sku = norm_sku_key(sku_raw)
-
-    pv = parse_int_maybe(safe_cell_value(ws.cell(row=r, column=price_col)))
-    pv = apply_multiplier_if_needed(pv)
-
-    if pv is None:
-        continue
-
-    out[sku] = int(pv)
+        code_raw = _norm_str(safe_cell_value(ws.cell(row=r, column=code_col)))
+        if not code_raw:
+            continue
+        code = norm_sku_key(code_raw)
+        pv = parse_int_maybe(safe_cell_value(ws.cell(row=r, column=price_col)))
+        pv = apply_multiplier_if_needed(pv)
+        if pv is None:
+            continue
+        out[code] = int(pv)
     return out
 
 # =========================
-# ENGINE: PRICE IN-PLACE (with debug info)
+# ENGINE: PRICE IN-PLACE (with debug)
 # =========================
 def process_price_inplace(
     template_bytes: bytes,
@@ -439,7 +442,7 @@ def process_price_inplace(
     spec: dict,
     pricelist_map: Dict[str, int],
     addon_map: Dict[str, int],
-    discount_rp: int = 0,   # diskon manual: rupiah full, TIDAK x1000
+    discount_rp: int = 0,
     only_changed: bool = True,
     debug: bool = False,
     debug_limit: int = 50,
@@ -540,7 +543,7 @@ def process_price_inplace(
     return workbook_to_bytes(wb), changes, dbg
 
 # =========================
-# ENGINE: DISCOUNT TEMPLATE (TikTok/PM) split 1000
+# DISCOUNT TEMPLATE (TikTok/PM)
 # =========================
 def chunk_list(items: List[dict], size: int) -> List[List[dict]]:
     return [items[i:i + size] for i in range(0, len(items), size)]
@@ -583,16 +586,6 @@ def process_discount_template(
     col_price = excel_col(spec["input"]["col_price"])
     col_stock = excel_col(spec["input"]["col_stock"])
     col_seller_sku = excel_col(spec["input"]["col_seller_sku"])
-
-    def col_is_all_empty(col_idx: int) -> bool:
-        for rr in range(data_start_row, min(ws.max_row, data_start_row + 50) + 1):
-            v = ws.cell(row=rr, column=col_idx).value
-            if v is not None and _norm_str(v) != "":
-                return False
-        return True
-
-    if col_is_all_empty(col_seller_sku):
-        col_seller_sku = excel_col("E")
 
     disc = int(discount_rp or 0)
     if disc < 0:
@@ -707,7 +700,7 @@ def process_discount_template(
     return out_files, pd.DataFrame(preview_rows), dbg
 
 # =========================
-# ENGINE: STOCK
+# STOCK
 # =========================
 def iter_sheets_range(wb, from_name: str, to_name: str) -> List[str]:
     names = wb.sheetnames
@@ -771,7 +764,6 @@ def build_stock_map_from_df(df: pd.DataFrame, qty_col: str) -> Dict[str, int]:
             break
     if sku_col is None:
         raise ValueError("File stok: kolom SKU (KODEBARANG/KODE BARANG/SKU) tidak ditemukan.")
-
     if qty_col not in df.columns:
         raise ValueError(f"Kolom stok '{qty_col}' tidak ditemukan.")
 
@@ -865,7 +857,6 @@ def process_stock_inplace(
     keep_only_rows(ws, data_start_row, changed_rows)
     return workbook_to_bytes(wb), changes, dbg
 
-
 # =========================
 # UI HELPERS
 # =========================
@@ -873,7 +864,6 @@ def download_outputs(out_files, zip_name: str):
     if not out_files:
         st.warning("Tidak ada baris yang berubah / semua baris skip.")
         return
-
     if len(out_files) == 1:
         name, data = out_files[0]
         st.download_button(
@@ -887,36 +877,16 @@ def download_outputs(out_files, zip_name: str):
         st.download_button("Download ZIP", data=z, file_name=zip_name, mime="application/zip")
 
 def ui_row_4(prefix: str, label_mass_update: str):
-    """1 baris: [mass update multi] [pricelist] [addon] [diskon manual]"""
     c1, c2, c3, c4 = st.columns([3.2, 2.2, 2.2, 1.4])
 
     with c1:
-        templates = st.file_uploader(
-            label_mass_update,
-            type=["xlsx"],
-            accept_multiple_files=True,
-            key=f"{prefix}_tpl",
-        )
+        templates = st.file_uploader(label_mass_update, type=["xlsx"], accept_multiple_files=True, key=f"{prefix}_tpl")
     with c2:
-        pricelist = st.file_uploader(
-            "Upload Pricelist",
-            type=["xlsx"],
-            key=f"{prefix}_pl",
-        )
+        pricelist = st.file_uploader("Upload Pricelist", type=["xlsx"], key=f"{prefix}_pl")
     with c3:
-        addon = st.file_uploader(
-            "Upload Addon",
-            type=["xlsx"],
-            key=f"{prefix}_ad",
-        )
+        addon = st.file_uploader("Upload Addon", type=["xlsx"], key=f"{prefix}_ad")
     with c4:
-        discount = st.number_input(
-            "Diskon Manual",
-            min_value=0,
-            value=0,
-            step=1000,
-            key=f"{prefix}_disc",
-        )
+        discount = st.number_input("Diskon Manual", min_value=0, value=0, step=1000, key=f"{prefix}_disc")
 
     return templates, pricelist, addon, int(discount)
 
@@ -968,19 +938,17 @@ def show_debug_block(debug_info: Dict, pricelist_len: Optional[int] = None, addo
         st.write("Contoh SKU tidak ketemu di file stok (maks 50):")
         st.dataframe(pd.DataFrame(debug_info["sample_missing_stock"]), use_container_width=True)
 
-
 # =========================
-# APP UI
+# APP
 # =========================
 st.title("sellerengine")
-
 debug_mode = st.checkbox("🔧 Debug Mode", value=False)
 
 tab_hn, tab_hc, tab_st = st.tabs(["Harga Normal", "Harga Coret", "Update Stok"])
 
-# =========================
+# -------------------------
 # TAB: HARGA NORMAL
-# =========================
+# -------------------------
 with tab_hn:
     t1, t2, t3, t4 = st.tabs(["TikTok", "Shopee", "PowerMerchant", "BigSeller"])
 
@@ -1021,7 +989,6 @@ with tab_hn:
                     out_files.append((f.name.replace(".xlsx", "_changed.xlsx"), out_bytes))
                 if debug_mode:
                     all_debug.append(dbg)
-
                 prog.progress((i + 1) / len(templates))
 
             download_outputs(out_files, f"harga_normal_{platform}.zip")
@@ -1042,13 +1009,12 @@ with tab_hn:
     with t4:
         harga_normal("bigseller", "hn_bs", "Upload File Mass Update (BigSeller)")
 
-# =========================
+# -------------------------
 # TAB: HARGA CORET
-# =========================
+# -------------------------
 with tab_hc:
     c1, c2, c3 = st.tabs(["TikTok (Discount Template)", "PowerMerchant (Discount Template)", "Shopee (Harga Diskon)"])
 
-    # TikTok Discount Template
     with c1:
         platform = "tiktok"
         prefix = "hc_tt"
@@ -1098,7 +1064,6 @@ with tab_hc:
                 if len(all_debug) > 3:
                     st.warning(f"Debug ditampilkan hanya untuk 3 file pertama (total file: {len(all_debug)}).")
 
-    # PowerMerchant Discount Template (M4)
     with c2:
         platform = "powermerchant"
         prefix = "hc_pm"
@@ -1148,7 +1113,6 @@ with tab_hc:
                 if len(all_debug) > 3:
                     st.warning(f"Debug ditampilkan hanya untuk 3 file pertama (total file: {len(all_debug)}).")
 
-    # Shopee in-place Harga Diskon
     with c3:
         platform = "shopee"
         prefix = "hc_sp"
@@ -1194,9 +1158,9 @@ with tab_hc:
                 if len(all_debug) > 3:
                     st.warning(f"Debug ditampilkan hanya untuk 3 file pertama (total file: {len(all_debug)}).")
 
-# =========================
+# -------------------------
 # TAB: UPDATE STOK
-# =========================
+# -------------------------
 with tab_st:
     s1, s2 = st.tabs(["TikTok", "Shopee"])
 
@@ -1205,7 +1169,6 @@ with tab_st:
         sheets_from = spec["stock_source"]["sheets_from"]
         sheets_to = spec["stock_source"]["sheets_to"]
 
-        # Slot "Upload Pricelist" dipakai sebagai FILE STOK SUMBER (sheet LAPTOP..SER OTH CON)
         templates, stock_source_file, _addon_unused, _disc_unused = ui_row_4(prefix, label)
 
         mode = st.radio("Mode Stok", ["Nasional", "Area", "Toko"], horizontal=True, key=f"{prefix}_mode")
@@ -1284,6 +1247,3 @@ with tab_st:
         update_stok("tiktok", "st_tt", "Upload File Mass Update (TikTok Stok)")
     with s2:
         update_stok("shopee", "st_sp", "Upload File Mass Update (Shopee Stok)")
-
-
-
